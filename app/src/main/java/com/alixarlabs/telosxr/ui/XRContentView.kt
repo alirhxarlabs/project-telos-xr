@@ -86,87 +86,42 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
                 )
         ) {
             // ========== STEREO VIDEO RENDERING ==========
-            // FORCED STEREO MODE: Always use SurfaceEntity with SIDE_BY_SIDE
-            // Removed spatial UI check - directly create SurfaceEntity if XR session exists
-            //
-            // This bypasses the isSpatialUiEnabled check which returns false on Galaxy XR alpha10
-            android.util.Log.d("XRContentView", "Rendering video in FORCED STEREO mode")
+            // Using GL_OVR_multiview2 extension (Meta Quest/Magic Leap approach)
+            // Single draw call renders to both eyes automatically
+            android.util.Log.d("XRContentView", "Using multiview stereo renderer")
 
-            // Get XR session
-            val xrSession = LocalSession.current
-            android.util.Log.d("XRContentView", "XR Session: ${xrSession != null}")
+            var stereoRenderer by remember { mutableStateOf<com.alixarlabs.telosxr.rendering.StereoGLRenderer?>(null) }
 
-            var surfaceEntity by remember { mutableStateOf<SurfaceEntity?>(null) }
+            DisposableEffect(Unit) {
+                onDispose {
+                    stereoRenderer?.release()
+                }
+            }
 
-            // Always use SurfaceEntity with SIDE_BY_SIDE stereo mode
-            if (xrSession != null) {
-                LaunchedEffect(Unit) {
-                    surfaceEntity = null
-
-                    try {
-                        android.util.Log.d("XRContentView", "Creating SurfaceEntity with SIDE_BY_SIDE stereo mode")
-
-                        val newEntity = SurfaceEntity.create(
-                            session = xrSession,
-                            stereoMode = SurfaceEntity.StereoMode.SIDE_BY_SIDE,
-                            pose = Pose(Vector3(0.0f, 0.0f, -2.0f)),
-                            shape = SurfaceEntity.Shape.Quad(FloatSize2d(1.6f, 0.9f))
-                        )
-
-                        android.util.Log.d("XRContentView", "SurfaceEntity created, getting Surface...")
-                        surfaceEntity = newEntity
-
-                        val surface = newEntity.getSurface()
-                        android.util.Log.d("XRContentView", "Got surface: ${if (surface != null) "isValid=${surface.isValid}" else "null"}")
-
-                        if (surface != null && surface.isValid) {
-                            android.util.Log.d("XRContentView", "Surface ready! Passing to decoder...")
+            AndroidView(
+                factory = { ctx ->
+                    android.util.Log.d("XRContentView", "Creating GLSurfaceView with multiview stereo")
+                    android.opengl.GLSurfaceView(ctx).apply {
+                        setEGLContextClientVersion(3)  // Use OpenGL ES 3.0 for multiview support
+                        preserveEGLContextOnPause = true
+                        val renderer = com.alixarlabs.telosxr.rendering.StereoGLRenderer { surface ->
+                            android.util.Log.d("XRContentView", "Multiview surface ready")
                             viewModel.setSurface(surface)
                             viewModel.startStreaming()
-                        } else {
-                            android.util.Log.e("XRContentView", "Surface is invalid/null")
                         }
-                    } catch (e: Exception) {
-                        android.util.Log.e("XRContentView", "Failed to create SurfaceEntity", e)
+                        stereoRenderer = renderer
+                        setRenderer(renderer)
+                        renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                        android.util.Log.d("XRContentView", "GLSurfaceView multiview configured")
                     }
+                },
+                modifier = Modifier.fillMaxSize(),
+                update = { view ->
+                    android.util.Log.v("XRContentView", "GLSurfaceView update")
+                    view.onResume()
+                    view.requestRender()
                 }
-            } else {
-                // Fallback for non-XR devices - use GLSurfaceView with stereo renderer
-                android.util.Log.d("XRContentView", "No XR session - using GLSurfaceView stereo fallback")
-
-                var stereoRenderer by remember { mutableStateOf<com.alixarlabs.telosxr.rendering.StereoGLRenderer?>(null) }
-
-                DisposableEffect(Unit) {
-                    onDispose {
-                        stereoRenderer?.release()
-                    }
-                }
-
-                AndroidView(
-                    factory = { ctx ->
-                        android.util.Log.d("XRContentView", "Creating GLSurfaceView for stereo rendering")
-                        android.opengl.GLSurfaceView(ctx).apply {
-                            setEGLContextClientVersion(2)
-                            preserveEGLContextOnPause = true
-                            val renderer = com.alixarlabs.telosxr.rendering.StereoGLRenderer { surface ->
-                                android.util.Log.d("XRContentView", "Surface ready from StereoGLRenderer")
-                                viewModel.setSurface(surface)
-                                viewModel.startStreaming()
-                            }
-                            stereoRenderer = renderer
-                            setRenderer(renderer)
-                            renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                            android.util.Log.d("XRContentView", "GLSurfaceView configured with RENDERMODE_CONTINUOUSLY")
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    update = { view ->
-                        android.util.Log.v("XRContentView", "GLSurfaceView update - calling onResume()")
-                        view.onResume()
-                        view.requestRender()
-                    }
-                )
-            }
+            )
 
             // Show connection overlay on top when not connected
             if (connectionState !is ConnectionState.Connected) {

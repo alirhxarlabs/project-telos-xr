@@ -98,14 +98,14 @@ fun StatusOverlay(
             }
         }
 
-        // Stereo mode indicator (always enabled, no toggle)
+        // Stereo mode indicator
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "STEREO MODE",
+                text = "MULTIVIEW STEREO (GL_OVR)",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Green
             )

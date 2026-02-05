@@ -70,9 +70,12 @@ class StereoGLRenderer(
     // Frame counter for logging
     private var frameCount = 0
 
-    // Vertex shader - standard passthrough
+    // Vertex shader - with GL_OVR_multiview2 for Android XR (Meta Quest/Magic Leap approach)
     private val vertexShaderCode = """
         #version 300 es
+        #extension GL_OVR_multiview2 : enable
+        layout(num_views = 2) in;
+
         in vec4 aPosition;
         in vec2 aTexCoord;
         out vec2 vTexCoord;
@@ -83,29 +86,28 @@ class StereoGLRenderer(
         }
     """.trimIndent()
 
-    // Fragment shader - splits SBS texture into left/right eye
+    // Fragment shader - uses gl_ViewID_OVR for automatic eye selection
     private val fragmentShaderCode = """
         #version 300 es
         #extension GL_OES_EGL_image_external_essl3 : require
+        #extension GL_OVR_multiview2 : enable
         precision mediump float;
 
         in vec2 vTexCoord;
         out vec4 fragColor;
 
         uniform samplerExternalOES uTexture;
-        uniform int uEyeIndex;  // 0 = left, 1 = right
+        // gl_ViewID_OVR: 0 = left eye, 1 = right eye (automatically set by XR system)
 
         void main() {
-            // Calculate texture coordinate for SBS split
-            // Left eye: sample from left half (x: 0.0 to 0.5)
-            // Right eye: sample from right half (x: 0.5 to 1.0)
+            // Split side-by-side video based on eye
             vec2 texCoord = vTexCoord;
 
-            if (uEyeIndex == 0) {
-                // Left eye: map [0,1] to [0,0.5]
+            if (gl_ViewID_OVR == 0u) {
+                // Left eye: sample from left half [0, 0.5]
                 texCoord.x = texCoord.x * 0.5;
             } else {
-                // Right eye: map [0,1] to [0.5,1.0]
+                // Right eye: sample from right half [0.5, 1.0]
                 texCoord.x = 0.5 + texCoord.x * 0.5;
             }
 
@@ -226,7 +228,6 @@ class StereoGLRenderer(
         val positionHandle = GLES20.glGetAttribLocation(shaderProgram, "aPosition")
         val texCoordHandle = GLES20.glGetAttribLocation(shaderProgram, "aTexCoord")
         val textureHandle = GLES20.glGetUniformLocation(shaderProgram, "uTexture")
-        val eyeIndexHandle = GLES20.glGetUniformLocation(shaderProgram, "uEyeIndex")
 
         // Bind texture
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -237,29 +238,18 @@ class StereoGLRenderer(
         GLES20.glEnableVertexAttribArray(positionHandle)
         GLES20.glEnableVertexAttribArray(texCoordHandle)
 
-        // Render LEFT EYE (left half of screen, but stretched to HALF width to show side-by-side)
-        // This matches Vision Pro: each eye is stretched from half-width source to full output size
-        GLES20.glViewport(0, 0, viewportWidth / 2, viewportHeight)
-        GLES20.glUniform1i(eyeIndexHandle, 0)  // Left eye samples from left half
+        // Single draw call with GL_OVR_multiview2 - automatically renders to both eyes
+        // gl_ViewID_OVR in shader determines which eye (0=left, 1=right)
+        // XR system handles viewport routing automatically
+        GLES20.glViewport(0, 0, viewportWidth, viewportHeight)
 
         vertexBuffer.position(0)
         GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
 
-        texCoordBufferLeft.position(0)
+        texCoordBufferLeft.position(0)  // Use same tex coords for both eyes
         GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, texCoordBufferLeft)
 
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-
-        // Render RIGHT EYE (right half of screen, stretched from right half of source)
-        GLES20.glViewport(viewportWidth / 2, 0, viewportWidth / 2, viewportHeight)
-        GLES20.glUniform1i(eyeIndexHandle, 1)  // Right eye samples from right half
-
-        vertexBuffer.position(0)
-        GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
-
-        texCoordBufferRight.position(0)
-        GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, texCoordBufferRight)
-
+        // Single draw call renders to both eye buffers automatically via multiview
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         // Disable vertex arrays
