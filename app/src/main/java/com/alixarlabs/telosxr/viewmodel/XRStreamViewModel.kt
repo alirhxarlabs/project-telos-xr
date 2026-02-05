@@ -27,8 +27,7 @@ class XRStreamViewModel : ViewModel() {
     private val _stats = MutableStateFlow(StreamStats())
     val stats: StateFlow<StreamStats> = _stats
 
-    private val _isStereoMode = MutableStateFlow(true)  // Default to stereo mode
-    val isStereoMode: StateFlow<Boolean> = _isStereoMode
+    // Stereo mode is now always enabled (removed toggle functionality)
 
     private var receiverService: FECReceiverService? = null
     private var pendingSurface: Surface? = null
@@ -106,11 +105,7 @@ class XRStreamViewModel : ViewModel() {
         receiverService?.stop()
     }
 
-    fun toggleStereoMode() {
-        val newValue = !_isStereoMode.value
-        Log.d(tag, "toggleStereoMode: ${_isStereoMode.value} -> $newValue")
-        _isStereoMode.value = newValue
-    }
+    // toggleStereoMode() removed - stereo mode is now always enabled
 
     override fun onCleared() {
         super.onCleared()

@@ -40,7 +40,6 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
-    val isStereoMode by viewModel.isStereoMode.collectAsStateWithLifecycle()
 
     // Voice command setup
     val commandClient = remember { OrbeyeCommandClient(thorIp = "192.168.0.225") }
@@ -86,50 +85,30 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
                     RoundedCornerShape(12.dp)
                 )
         ) {
-            // ========== VIDEO RENDERING - THREE MODES ==========
-            // STATUS: Video streaming works, voice works, stereo rendering NOT YET WORKING
+            // ========== STEREO VIDEO RENDERING ==========
+            // FORCED STEREO MODE: Always use SurfaceEntity with SIDE_BY_SIDE
+            // Removed spatial UI check - directly create SurfaceEntity if XR session exists
             //
-            // STEREO ISSUE: AndroidXR alpha10 spatial APIs are incomplete/unstable
-            // - SurfaceEntity.create() with StereoMode.SIDE_BY_SIDE is the correct API
-            // - But requires spatial UI enabled (isSpatialUiEnabled = true)
-            // - Galaxy XR currently returns isSpatialUiEnabled = false even in XR mode
-            // - GLSurfaceView stereo renderer works but surface gets destroyed by XR lifecycle
-            //
-            // THREE RENDERING MODES:
-            // 1. XR Headset + Spatial UI: Use SurfaceEntity with native stereo (PREFERRED, NOT WORKING YET)
-            // 2. Non-XR + Stereo: Use OpenGL renderer with custom shader (PARTIAL - surface lifecycle issues)
-            // 3. Non-XR + 2D: Use regular SurfaceView (WORKS)
-            //
-            // TODO FOR STEREO:
-            // - Wait for AndroidXR stable release with working spatial APIs
-            // - Or find workaround to enable spatial UI on Galaxy XR
-            // - Or fix GLSurfaceView surface lifecycle in XR environment
-            android.util.Log.d("XRContentView", "Rendering video view: isStereoMode=$isStereoMode")
+            // This bypasses the isSpatialUiEnabled check which returns false on Galaxy XR alpha10
+            android.util.Log.d("XRContentView", "Rendering video in FORCED STEREO mode")
 
-            // Check if we're in spatial environment
+            // Get XR session
             val xrSession = LocalSession.current
-            val spatialCapabilities = androidx.xr.compose.platform.LocalSpatialCapabilities.current
-            val isSpatialEnabled = spatialCapabilities?.isSpatialUiEnabled == true
-
-            android.util.Log.d("XRContentView", "XR Session: ${xrSession != null}, Spatial UI enabled: $isSpatialEnabled")
+            android.util.Log.d("XRContentView", "XR Session: ${xrSession != null}")
 
             var surfaceEntity by remember { mutableStateOf<SurfaceEntity?>(null) }
 
-            // MODE 1: XR Headset - Use SurfaceEntity with native stereo
-            if (xrSession != null && isSpatialEnabled) {
-                LaunchedEffect(isStereoMode) {
+            // Always use SurfaceEntity with SIDE_BY_SIDE stereo mode
+            if (xrSession != null) {
+                LaunchedEffect(Unit) {
                     surfaceEntity = null
 
                     try {
-                        android.util.Log.d("XRContentView", "Creating SurfaceEntity with stereoMode=${if (isStereoMode) "SIDE_BY_SIDE" else "MONO"}")
+                        android.util.Log.d("XRContentView", "Creating SurfaceEntity with SIDE_BY_SIDE stereo mode")
 
                         val newEntity = SurfaceEntity.create(
                             session = xrSession,
-                            stereoMode = if (isStereoMode) {
-                                SurfaceEntity.StereoMode.SIDE_BY_SIDE
-                            } else {
-                                SurfaceEntity.StereoMode.MONO
-                            },
+                            stereoMode = SurfaceEntity.StereoMode.SIDE_BY_SIDE,
                             pose = Pose(Vector3(0.0f, 0.0f, -2.0f)),
                             shape = SurfaceEntity.Shape.Quad(FloatSize2d(1.6f, 0.9f))
                         )
@@ -151,10 +130,9 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
                         android.util.Log.e("XRContentView", "Failed to create SurfaceEntity", e)
                     }
                 }
-            }
-            // MODE 2: Non-XR + Stereo Mode - Use custom OpenGL renderer
-            else if (isStereoMode) {
-                android.util.Log.d("XRContentView", "Using GLSurfaceView for stereo mode (non-XR)")
+            } else {
+                // Fallback for non-XR devices - use GLSurfaceView with stereo renderer
+                android.util.Log.d("XRContentView", "No XR session - using GLSurfaceView stereo fallback")
 
                 var stereoRenderer by remember { mutableStateOf<com.alixarlabs.telosxr.rendering.StereoGLRenderer?>(null) }
 
@@ -189,39 +167,6 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
                     }
                 )
             }
-            // MODE 3: Non-XR + 2D Mode - Use regular SurfaceView
-            else {
-                android.util.Log.d("XRContentView", "Using SurfaceView for 2D mode")
-                AndroidView(
-                    factory = { ctx ->
-                        android.view.SurfaceView(ctx).apply {
-                            holder.addCallback(object : SurfaceHolder.Callback {
-                                override fun surfaceCreated(holder: SurfaceHolder) {
-                                    android.util.Log.d("XRContentView", "surfaceCreated: isValid=${holder.surface.isValid}")
-                                    viewModel.setSurface(holder.surface)
-                                    viewModel.startStreaming()
-                                }
-
-                                override fun surfaceChanged(
-                                    holder: SurfaceHolder,
-                                    format: Int,
-                                    width: Int,
-                                    height: Int
-                                ) {
-                                    android.util.Log.d("XRContentView", "surfaceChanged: ${width}x${height}, isValid=${holder.surface.isValid}")
-                                    viewModel.startStreaming()
-                                }
-
-                                override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                    android.util.Log.d("XRContentView", "surfaceDestroyed")
-                                    viewModel.stopStreaming()
-                                }
-                            })
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
 
             // Show connection overlay on top when not connected
             if (connectionState !is ConnectionState.Connected) {
@@ -232,17 +177,12 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
             }
         }
 
-        // Status bar (matches Vision Pro layout)
+        // Status bar (matches Vision Pro layout) - stereo toggle removed
         if (connectionState is ConnectionState.Connected) {
             StatusOverlay(
                 fps = stats.currentFps,
                 isVoiceListening = isListening,
-                lastCommand = lastTranscript,
-                isStereoMode = isStereoMode,
-                onToggleStereo = {
-                    android.util.Log.d("XRContentView", "Toggling stereo mode from $isStereoMode")
-                    viewModel.toggleStereoMode()
-                }
+                lastCommand = lastTranscript
             )
         }
     }

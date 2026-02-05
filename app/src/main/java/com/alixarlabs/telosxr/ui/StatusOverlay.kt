@@ -19,16 +19,13 @@ import androidx.compose.ui.unit.dp
  * - FPS counter
  * - Voice command indicator (mic with red/gray color)
  * - Last voice command transcript
- * - 2D/3D toggle switch
- * - Disconnect button
+ * (Stereo mode is always enabled - toggle removed)
  */
 @Composable
 fun StatusOverlay(
     fps: Float,
     isVoiceListening: Boolean,
-    lastCommand: String,
-    isStereoMode: Boolean,
-    onToggleStereo: () -> Unit
+    lastCommand: String
 ) {
     Column(
         modifier = Modifier
@@ -101,29 +98,17 @@ fun StatusOverlay(
             }
         }
 
-        // Controls row (centered)
+        // Stereo mode indicator (always enabled, no toggle)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 2D/3D Toggle
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Switch(
-                    checked = isStereoMode,
-                    onCheckedChange = {
-                        android.util.Log.d("StatusOverlay", "Toggle clicked: $isStereoMode -> ${!isStereoMode}")
-                        onToggleStereo()
-                    }
-                )
-                Text(
-                    text = if (isStereoMode) "3D" else "2D",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
+            Text(
+                text = "STEREO MODE",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Green
+            )
         }
     }
 }
