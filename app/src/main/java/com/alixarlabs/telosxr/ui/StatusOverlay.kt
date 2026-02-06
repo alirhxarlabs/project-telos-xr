@@ -25,7 +25,9 @@ import androidx.compose.ui.unit.dp
 fun StatusOverlay(
     fps: Float,
     isVoiceListening: Boolean,
-    lastCommand: String
+    lastCommand: String,
+    isStereoMode: Boolean,
+    onToggleStereo: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -98,17 +100,40 @@ fun StatusOverlay(
             }
         }
 
-        // Stereo mode indicator
+        // 2D/3D Toggle (centered, matching Vision Pro)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "MULTIVIEW STEREO (GL_OVR)",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Green
-            )
+            Button(
+                onClick = onToggleStereo,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isStereoMode) Color.Green.copy(alpha = 0.2f)
+                                    else Color.Gray.copy(alpha = 0.2f)
+                )
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "2D",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (!isStereoMode) Color.White else Color.Gray
+                    )
+                    Text(
+                        text = "/",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Gray
+                    )
+                    Text(
+                        text = "3D",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isStereoMode) Color.White else Color.Gray
+                    )
+                }
+            }
         }
     }
 }

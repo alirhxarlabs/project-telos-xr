@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 
 /**
  * Sends periodic heartbeat packets to Thor device.
@@ -15,12 +16,19 @@ class HeartbeatSender {
     private var job: Job? = null
     private var socket: DatagramSocket? = null
 
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, sourceAddress: InetAddress? = null) {
         stop()
 
         job = scope.launch(Dispatchers.IO) {
             try {
-                socket = DatagramSocket()
+                // Bind to specific interface if provided, otherwise use default
+                socket = if (sourceAddress != null) {
+                    Log.i(TAG, "Binding heartbeat sender to ${sourceAddress.hostAddress}")
+                    DatagramSocket(InetSocketAddress(sourceAddress, 0))
+                } else {
+                    DatagramSocket()
+                }
+
                 val thorAddress = InetAddress.getByName(NetworkConfig.THOR_IP)
 
                 Log.i(TAG, "Starting heartbeat to ${NetworkConfig.THOR_IP}:${NetworkConfig.HEARTBEAT_PORT}")

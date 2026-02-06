@@ -1,10 +1,11 @@
 package com.alixarlabs.telosxr.ui
 
-import android.view.SurfaceHolder
-import androidx.compose.foundation.background
+import android.opengl.GLSurfaceView
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,11 +17,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
-import androidx.xr.compose.platform.LocalSession
-import androidx.xr.runtime.math.Pose
-import androidx.xr.runtime.math.Vector3
-import androidx.xr.runtime.math.FloatSize2d
-import androidx.xr.scenecore.SurfaceEntity
+import com.alixarlabs.telosxr.model.ConnectionMode
 import com.alixarlabs.telosxr.model.ConnectionState
 import com.alixarlabs.telosxr.viewmodel.XRStreamViewModel
 import com.alixarlabs.telosxr.voice.OrbeyeCommandClient
@@ -40,6 +37,8 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val isStereoMode by viewModel.isStereoMode.collectAsStateWithLifecycle()
+    val connectionMode by viewModel.connectionMode.collectAsStateWithLifecycle()
 
     // Voice command setup
     val commandClient = remember { OrbeyeCommandClient(thorIp = "192.168.0.225") }
@@ -64,64 +63,112 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.Top
     ) {
-        // Video Player Area (800x450 matching Vision Pro)
-        Box(
+        // Connection Mode Selector (WiFi / USB)
+        Row(
             modifier = Modifier
-                .size(800.dp, 450.dp)
-                .background(
-                    if (connectionState is ConnectionState.Connected) Color.Black
-                    else Color.Black.copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(12.dp)
-                )
-                .border(
-                    2.dp,
-                    if (connectionState is ConnectionState.Connected) Color.Green else Color.Gray,
-                    RoundedCornerShape(12.dp)
-                )
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // ========== STEREO VIDEO RENDERING ==========
-            // Using GL_OVR_multiview2 extension (Meta Quest/Magic Leap approach)
-            // Single draw call renders to both eyes automatically
-            android.util.Log.d("XRContentView", "Using multiview stereo renderer")
+            FilterChip(
+                selected = connectionMode == ConnectionMode.WIFI,
+                onClick = { viewModel.setConnectionMode(ConnectionMode.WIFI) },
+                label = { Text("WiFi") },
+                leadingIcon = {
+                    if (connectionMode == ConnectionMode.WIFI) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            )
 
-            var stereoRenderer by remember { mutableStateOf<com.alixarlabs.telosxr.rendering.StereoGLRenderer?>(null) }
+            Spacer(modifier = Modifier.width(8.dp))
 
-            DisposableEffect(Unit) {
+            FilterChip(
+                selected = connectionMode == ConnectionMode.USB_TETHERED,
+                onClick = { viewModel.setConnectionMode(ConnectionMode.USB_TETHERED) },
+                label = { Text("USB") },
+                leadingIcon = {
+                    if (connectionMode == ConnectionMode.USB_TETHERED) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            )
+        }
+
+        // Video Player Area - fullscreen
+        Box(
+            modifier = Modifier.weight(1f)
+        ) {
+            // ========== VIDEO RENDERING (2D/3D SWITCHABLE) ==========
+            // 3D Mode: GL_OVR_multiview2 extension for stereo splitting
+            // 2D Mode: Simple renderer showing full SBS frame
+            val rendererMode = if (isStereoMode) "3D Stereo" else "2D Mono"
+            android.util.Log.d("XRContentView", "Renderer mode: $rendererMode")
+
+            var currentRenderer by remember { mutableStateOf<Any?>(null) }
+
+            DisposableEffect(isStereoMode) {
                 onDispose {
-                    stereoRenderer?.release()
+                    android.util.Log.d("XRContentView", "Disposing renderer, stopping stream")
+                    // Stop streaming before releasing renderer
+                    viewModel.stopStreaming()
+                    when (val renderer = currentRenderer) {
+                        is com.alixarlabs.telosxr.rendering.StereoGLRenderer -> renderer.release()
+                        is com.alixarlabs.telosxr.rendering.MonoGLRenderer -> renderer.release()
+                    }
                 }
             }
 
-            AndroidView(
-                factory = { ctx ->
-                    android.util.Log.d("XRContentView", "Creating GLSurfaceView with multiview stereo")
-                    android.opengl.GLSurfaceView(ctx).apply {
-                        setEGLContextClientVersion(3)  // Use OpenGL ES 3.0 for multiview support
-                        preserveEGLContextOnPause = true
-                        val renderer = com.alixarlabs.telosxr.rendering.StereoGLRenderer { surface ->
-                            android.util.Log.d("XRContentView", "Multiview surface ready")
-                            viewModel.setSurface(surface)
-                            viewModel.startStreaming()
+            // Use key to force recreation when stereo mode changes
+            key(isStereoMode) {
+                AndroidView(
+                    factory = { ctx ->
+                        android.util.Log.d("XRContentView", "Creating GLSurfaceView ($rendererMode)")
+                        android.opengl.GLSurfaceView(ctx).apply {
+                            setEGLContextClientVersion(3)
+                            preserveEGLContextOnPause = true
+
+                            val renderer = if (isStereoMode) {
+                                com.alixarlabs.telosxr.rendering.StereoGLRenderer { surface ->
+                                    android.util.Log.d("XRContentView", "Stereo surface ready")
+                                    viewModel.setSurface(surface)
+                                    viewModel.startStreaming()
+                                }
+                            } else {
+                                com.alixarlabs.telosxr.rendering.MonoGLRenderer { surface ->
+                                    android.util.Log.d("XRContentView", "Mono surface ready")
+                                    viewModel.setSurface(surface)
+                                    viewModel.startStreaming()
+                                }
+                            }
+
+                            currentRenderer = renderer
+                            setRenderer(renderer as GLSurfaceView.Renderer)
+                            renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
+                            android.util.Log.d("XRContentView", "GLSurfaceView configured ($rendererMode)")
                         }
-                        stereoRenderer = renderer
-                        setRenderer(renderer)
-                        renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                        android.util.Log.d("XRContentView", "GLSurfaceView multiview configured")
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    update = { view ->
+                        android.util.Log.v("XRContentView", "GLSurfaceView update ($rendererMode)")
+                        view.onResume()
+                        view.requestRender()
                     }
-                },
-                modifier = Modifier.fillMaxSize(),
-                update = { view ->
-                    android.util.Log.v("XRContentView", "GLSurfaceView update")
-                    view.onResume()
-                    view.requestRender()
-                }
-            )
+                )
+            }
 
             // Show connection overlay on top when not connected
             if (connectionState !is ConnectionState.Connected) {
@@ -132,12 +179,14 @@ fun XRContentView(viewModel: XRStreamViewModel = viewModel()) {
             }
         }
 
-        // Status bar (matches Vision Pro layout) - stereo toggle removed
+        // Status bar (matches Vision Pro layout)
         if (connectionState is ConnectionState.Connected) {
             StatusOverlay(
                 fps = stats.currentFps,
                 isVoiceListening = isListening,
-                lastCommand = lastTranscript
+                lastCommand = lastTranscript,
+                isStereoMode = isStereoMode,
+                onToggleStereo = { viewModel.toggleStereoMode() }
             )
         }
     }

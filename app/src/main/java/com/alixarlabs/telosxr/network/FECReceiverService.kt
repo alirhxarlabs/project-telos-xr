@@ -13,6 +13,7 @@ import com.alixarlabs.telosxr.decoder.H264Decoder
 import com.alixarlabs.telosxr.fec.FECDecoder
 import com.alixarlabs.telosxr.fec.FECPacket
 import com.alixarlabs.telosxr.fec.NALReassembler
+import com.alixarlabs.telosxr.model.ConnectionMode
 import com.alixarlabs.telosxr.model.ConnectionState
 import com.alixarlabs.telosxr.model.StreamStats
 import kotlinx.coroutines.*
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import kotlin.coroutines.coroutineContext
 
@@ -50,6 +52,9 @@ class FECReceiverService : Service() {
     private var lastStatsUpdate = System.currentTimeMillis()
     private var framesAtLastUpdate = 0L
 
+    private var currentConnectionMode = ConnectionMode.WIFI
+    private var currentInterfaceInfo: NetworkInterfaceManager.InterfaceInfo? = null
+
     inner class LocalBinder : Binder() {
         fun getService(): FECReceiverService = this@FECReceiverService
     }
@@ -70,15 +75,40 @@ class FECReceiverService : Service() {
         Log.i(TAG, "FECReceiverService destroyed")
     }
 
-    fun start(surface: Surface) {
+    fun start(surface: Surface, connectionMode: ConnectionMode = ConnectionMode.WIFI) {
         if (receiverJob?.isActive == true) {
             Log.w(TAG, "Receiver already running, updating surface instead")
             h264Decoder?.updateSurface(surface)
             return
         }
 
-        Log.i(TAG, "Starting FEC receiver")
+        Log.i(TAG, "Starting FEC receiver in $connectionMode mode")
+        currentConnectionMode = connectionMode
         _connectionState.value = ConnectionState.Connecting
+
+        // Detect network interface based on connection mode
+        currentInterfaceInfo = when (connectionMode) {
+            ConnectionMode.WIFI -> {
+                Log.i(TAG, "Detecting WiFi interface...")
+                NetworkInterfaceManager.detectWiFiInterface()
+            }
+            ConnectionMode.USB_TETHERED -> {
+                Log.i(TAG, "Detecting USB ethernet interface...")
+                NetworkInterfaceManager.detectUSBInterface()
+            }
+        }
+
+        if (currentInterfaceInfo == null) {
+            val errorMsg = when (connectionMode) {
+                ConnectionMode.WIFI -> "WiFi interface not found"
+                ConnectionMode.USB_TETHERED -> "USB ethernet interface not found. Please connect USB-C ethernet adapter."
+            }
+            Log.e(TAG, errorMsg)
+            _connectionState.value = ConnectionState.Error(errorMsg)
+            return
+        }
+
+        Log.i(TAG, "Using interface: ${currentInterfaceInfo?.name} (${currentInterfaceInfo?.ipAddress?.hostAddress})")
 
         // Release any existing decoder first
         h264Decoder?.release()
@@ -86,8 +116,10 @@ class FECReceiverService : Service() {
         // Initialize new decoder
         h264Decoder = H264Decoder(surface)
 
-        // Start heartbeat
-        heartbeatSender.start(serviceScope)
+        // Start heartbeat with selected interface
+        currentInterfaceInfo?.let { interfaceInfo ->
+            heartbeatSender.start(serviceScope, interfaceInfo.ipAddress)
+        }
 
         // Start receiver
         receiverJob = serviceScope.launch(Dispatchers.IO) {
@@ -127,13 +159,21 @@ class FECReceiverService : Service() {
 
     private suspend fun receiveLoop() {
         try {
-            // Create socket
-            socket = DatagramSocket(NetworkConfig.DATA_PORT).apply {
+            // Create socket bound to specific interface IP
+            val interfaceInfo = currentInterfaceInfo
+            if (interfaceInfo == null) {
+                Log.e(TAG, "No interface info available")
+                _connectionState.value = ConnectionState.Error("No network interface available")
+                return
+            }
+
+            val bindAddress = InetSocketAddress(interfaceInfo.ipAddress, NetworkConfig.DATA_PORT)
+            socket = DatagramSocket(bindAddress).apply {
                 receiveBufferSize = NetworkConfig.RECEIVE_BUFFER_SIZE
                 soTimeout = 1000 // 1 second timeout for checking cancellation
             }
 
-            Log.i(TAG, "Listening on port ${NetworkConfig.DATA_PORT}")
+            Log.i(TAG, "Listening on ${interfaceInfo.name} (${interfaceInfo.ipAddress.hostAddress}:${NetworkConfig.DATA_PORT})")
 
             val buffer = ByteArray(NetworkConfig.MTU_SIZE)
             val packet = DatagramPacket(buffer, buffer.size)

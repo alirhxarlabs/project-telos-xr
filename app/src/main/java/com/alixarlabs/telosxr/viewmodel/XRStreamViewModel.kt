@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import com.alixarlabs.telosxr.model.ConnectionMode
 import com.alixarlabs.telosxr.model.ConnectionState
 import com.alixarlabs.telosxr.model.StreamStats
 import com.alixarlabs.telosxr.network.FECReceiverService
@@ -27,7 +28,13 @@ class XRStreamViewModel : ViewModel() {
     private val _stats = MutableStateFlow(StreamStats())
     val stats: StateFlow<StreamStats> = _stats
 
-    // Stereo mode is now always enabled (removed toggle functionality)
+    // Stereo mode toggle (default: true for 3D stereo)
+    private val _isStereoMode = MutableStateFlow(true)
+    val isStereoMode: StateFlow<Boolean> = _isStereoMode
+
+    // Connection mode (default: WiFi)
+    private val _connectionMode = MutableStateFlow(ConnectionMode.WIFI)
+    val connectionMode: StateFlow<ConnectionMode> = _connectionMode
 
     private var receiverService: FECReceiverService? = null
     private var pendingSurface: Surface? = null
@@ -94,8 +101,8 @@ class XRStreamViewModel : ViewModel() {
         if (surfaceToUse != null) {
             // Start streaming even if surface is currently invalid
             // H264Decoder will wait for surface to become valid
-            Log.d(tag, "Starting service (surface valid=${surfaceToUse.isValid})")
-            receiverService?.start(surfaceToUse)
+            Log.d(tag, "Starting service (surface valid=${surfaceToUse.isValid}) in ${_connectionMode.value} mode")
+            receiverService?.start(surfaceToUse, _connectionMode.value)
         } else {
             Log.w(tag, "Cannot start streaming: surface is null")
         }
@@ -105,7 +112,26 @@ class XRStreamViewModel : ViewModel() {
         receiverService?.stop()
     }
 
-    // toggleStereoMode() removed - stereo mode is now always enabled
+    fun toggleStereoMode() {
+        _isStereoMode.value = !_isStereoMode.value
+        Log.d(tag, "Stereo mode toggled: ${_isStereoMode.value}")
+    }
+
+    fun setConnectionMode(mode: ConnectionMode) {
+        if (_connectionMode.value != mode) {
+            _connectionMode.value = mode
+            Log.d(tag, "Connection mode changed to: $mode")
+
+            // If currently streaming, restart with new connection mode
+            if (receiverService != null && _connectionState.value is ConnectionState.Connected) {
+                Log.d(tag, "Restarting stream with new connection mode")
+                stopStreaming()
+                pendingSurface?.let { surface ->
+                    startStreaming(surface)
+                }
+            }
+        }
+    }
 
     override fun onCleared() {
         super.onCleared()
